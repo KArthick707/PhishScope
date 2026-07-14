@@ -1,0 +1,16 @@
+# Personal/real email data -- contains real names, real senders, and content
+# from the project owner's actual inbox. Do not publish raw .eml files.
+datasets/raw/
+datasets/processed/
+
+# Trained model artifacts (large binaries, regenerable from datasets/ + training scripts)
+models/*.pkl
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Reports / scratch
+*.log
