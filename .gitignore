@@ -14,3 +14,7 @@ venv/
 
 # Reports / scratch
 *.log
+
+# OAuth tokens -- live Gmail API credentials, never commit
+backend/.gmail_token.json
+.env
