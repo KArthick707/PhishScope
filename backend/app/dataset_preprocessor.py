@@ -75,6 +75,13 @@ def process_directory(directory: str, label: int):
                 "urgency_keyword_count": features["urgency_keyword_count"],
                 "credential_keyword_count": features["credential_keyword_count"],
 
+                "trusted_domain_match": features["trusted_domain_match"],
+                "trusted_sender_domain": features["trusted_sender_domain"],
+                "trusted_return_path_domain": features["trusted_return_path_domain"],
+                "unsubscribe_present": features["unsubscribe_present"],
+                "marketing_email_score": features["marketing_email_score"],
+                "social_link_count": features["social_link_count"],
+
                 "risk_score": scoring["score"],
                 "rule_verdict": scoring["verdict"]
             }
