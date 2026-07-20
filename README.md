@@ -75,4 +75,4 @@ docs/              Architecture notes
 
 ## License
 
-Not yet decided — treat as all-rights-reserved until a `LICENSE` file is added.
+All rights reserved — see [`LICENSE`](LICENSE). This repository is public for demonstration and evaluation purposes; it is not open source, and no permission is granted to use, copy, modify, or redistribute the code without prior written permission.
