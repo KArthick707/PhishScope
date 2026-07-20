@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>PhishScope</title>
+<script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+<script src="taskpane.js" defer></script>
+<style>
+  body { font-family: "Segoe UI", -apple-system, sans-serif; margin: 0; padding: 14px; color: #1a1a1a; font-size: 13px; }
+  h1 { font-size: 15px; margin: 0 0 12px; }
+  #status { color: #6b7280; }
+  .verdict { border-radius: 8px; padding: 12px; margin-bottom: 12px; border: 1px solid transparent; }
+  .verdict h2 { margin: 0 0 6px; font-size: 14px; }
+  .verdict-phishing { background: #fee2e2; border-color: #fca5a5; color: #7f1d1d; }
+  .verdict-suspicious { background: #fef3c7; border-color: #fcd34d; color: #78350f; }
+  .verdict-needs_review { background: #e0e7ff; border-color: #a5b4fc; color: #312e81; }
+  .verdict-benign_or_low_risk { background: #dcfce7; border-color: #86efac; color: #14532d; }
+  .detail { border-top: 1px solid #e5e7eb; padding-top: 10px; margin-top: 10px; }
+  .detail dt { font-weight: 600; color: #6b7280; font-size: 11px; text-transform: uppercase; }
+  .detail dd { margin: 2px 0 8px; }
+  ul { margin: 6px 0; padding-left: 18px; }
+  li { margin-bottom: 3px; }
+  .tokens { font-style: italic; color: #6b7280; }
+  .error { color: #b91c1c; }
+</style>
+</head>
+<body>
+  <h1>PhishScope</h1>
+  <div id="status">Analyzing this message&hellip;</div>
+  <div id="result" style="display:none;">
+    <div id="verdictBox" class="verdict">
+      <h2 id="verdictTitle"></h2>
+      <div id="verdictAdvice"></div>
+    </div>
+    <dl class="detail">
+      <dt>Confidence</dt><dd id="confidence"></dd>
+      <dt>Rule score</dt><dd id="ruleScore"></dd>
+      <dt>ML phishing probability</dt><dd id="mlProb"></dd>
+      <dt>Evidence</dt><dd><ul id="evidenceList"></ul></dd>
+    </dl>
+    <div id="tokens" class="tokens"></div>
+  </div>
+</body>
+</html>
