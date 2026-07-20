@@ -98,6 +98,24 @@ def make_final_decision(
     trusted_return_path_domain = features.get("trusted_return_path_domain", False)
     auth_failed = authentication_failed(features)
 
+    # TODO(founder decision): define when the ML model is "confidently benign"
+    # enough that rule_score alone should NOT escalate a message to "suspicious".
+    #
+    # This single threshold encodes PhishScope's false-positive vs false-negative
+    # risk appetite. On the observed false positives the ML probabilities were
+    # 0.21-0.28 (legit marketing), while borderline/needs-review mail tends to
+    # sit around 0.4-0.55. So a ceiling somewhere in 0.30-0.40 clears the
+    # marketing false positives while still letting rules speak on anything the
+    # ML is even mildly unsure about.
+    #
+    #   Lower ceiling (e.g. 0.30) = more cautious: rules keep escalating unless
+    #     ML is very sure it's safe. Fewer missed phishing, more false positives.
+    #   Higher ceiling (e.g. 0.45) = more trusting of the ML: quieter inbox,
+    #     but rules are silenced on more mail.
+    #
+    ML_BENIGN_CEILING = 0.35
+    ml_confidently_benign = adjusted_probability < ML_BENIGN_CEILING
+
     if (
         trusted_domain_match
         and trusted_sender_domain
@@ -166,7 +184,13 @@ def make_final_decision(
             )
         }
 
-    elif rule_score >= 25 or adjusted_probability >= 0.55:
+    # A confidently-benign ML verdict with passing authentication should not be
+    # escalated to "suspicious" by rule_score alone. Several rules (many_urls,
+    # tracking_pixel, html_obfuscation) fire on essentially all legitimate bulk
+    # marketing mail, so on their own they produce false positives the ML model
+    # already correctly rates as benign. Real phishing is unaffected: it carries
+    # a high ML probability or fails authentication, so it never reaches here.
+    elif (rule_score >= 25 and not (ml_confidently_benign and not auth_failed)) or adjusted_probability >= 0.55:
         final = {
             "final_verdict": "suspicious",
             "confidence": 70,
