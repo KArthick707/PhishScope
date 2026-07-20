@@ -14,9 +14,20 @@ TOKEN_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file
 
 REDIRECT_URI = os.environ.get("GOOGLE_REDIRECT_URI", "http://localhost:8000/auth/google/callback")
 
-# Holds the OAuth `state` between the /login redirect and the /callback request.
-# Only correct for a single concurrent login attempt -- fine for single-user MVP.
-_pending_state = {"value": None}
+# oauthlib refuses token exchanges over plain http (tokens must not transit a
+# network unencrypted). Localhost never touches the network, so allow the
+# documented exception -- but only when the redirect really is localhost, so a
+# production https deployment keeps strict transport checks.
+if REDIRECT_URI.startswith(("http://localhost", "http://127.0.0.1")):
+    os.environ.setdefault("OAUTHLIB_INSECURE_TRANSPORT", "1")
+
+# Holds the OAuth `state` and PKCE code verifier between the /login redirect
+# and the /callback request. The library enables PKCE by default: the Flow that
+# builds the auth URL generates a code_verifier that MUST be replayed at token
+# exchange, so it has to survive across the two requests (we construct a fresh
+# Flow in each). Only correct for a single concurrent login -- fine for the
+# single-user MVP.
+_pending_state = {"value": None, "code_verifier": None}
 
 
 def _client_config():
@@ -46,6 +57,7 @@ def build_authorization_url() -> str:
         prompt="consent",
     )
     _pending_state["value"] = state
+    _pending_state["code_verifier"] = flow.code_verifier
     return auth_url
 
 
@@ -53,6 +65,8 @@ def exchange_code_for_token(callback_url: str) -> None:
     flow = Flow.from_client_config(
         _client_config(), scopes=SCOPES, redirect_uri=REDIRECT_URI, state=_pending_state["value"]
     )
+    if _pending_state.get("code_verifier"):
+        flow.code_verifier = _pending_state["code_verifier"]
     flow.fetch_token(authorization_response=callback_url)
     _save_credentials(flow.credentials)
 

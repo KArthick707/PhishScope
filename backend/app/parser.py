@@ -1,5 +1,6 @@
 from email import policy
 from email.parser import BytesParser
+from email import message_from_string
 from bs4 import BeautifulSoup
 import re
 
@@ -66,6 +67,67 @@ def parse_eml_bytes(file_bytes: bytes) -> dict:
             text_body = str(content)
         elif content_type == "text/html":
             html_body = str(content)
+
+    html_text = clean_html(html_body) if html_body else ""
+    full_text = f"{text_body} {html_text}"
+
+    urls = extract_urls(full_text + " " + html_body)
+
+    headers = {
+        "authentication_results": msg.get("authentication-results", ""),
+        "received_spf": msg.get("received-spf", ""),
+        "dkim_signature": msg.get("dkim-signature", ""),
+        "reply_to": reply_to,
+        "return_path": return_path,
+    }
+
+    return {
+        "email": {
+            "subject": subject,
+            "from": sender,
+            "to": recipient,
+            "date": date,
+            "reply_to": reply_to,
+            "return_path": return_path,
+        },
+        "headers": headers,
+        "body": {
+            "text": text_body.strip(),
+            "html": html_body.strip(),
+            "preview": full_text[:1000].strip()
+        },
+        "urls": urls,
+        "url_count": len(urls),
+        "attachments": attachments,
+        "attachment_count": len(attachments)
+    }
+
+
+def parse_headers_and_body(
+    headers_text: str,
+    html_body: str = "",
+    text_body: str = "",
+    attachments: list[dict] | None = None,
+) -> dict:
+    """Builds the same parsed-email dict as parse_eml_bytes() from headers and
+    body delivered separately.
+
+    Outlook add-ins (office.js) cannot access a message's raw MIME in a read
+    taskpane -- they expose getAllInternetHeadersAsync() (full header block as
+    one string) and the rendered body. Re-gluing those into synthetic RFC822
+    would break: the original Content-Type header declares multipart
+    boundaries that no longer exist in the rendered body. So this parses the
+    header block directly and reuses the same body helpers instead.
+    """
+    msg = message_from_string(headers_text or "", policy=policy.default)
+    attachments = attachments or []
+
+    subject = msg.get("subject", "")
+    sender = msg.get("from", "")
+    recipient = msg.get("to", "")
+    date = msg.get("date", "")
+    reply_to = msg.get("reply-to", "")
+    return_path = msg.get("return-path", "")
 
     html_text = clean_html(html_body) if html_body else ""
     full_text = f"{text_body} {html_text}"
