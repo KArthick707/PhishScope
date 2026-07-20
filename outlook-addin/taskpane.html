@@ -7,7 +7,15 @@
 <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
 <script src="taskpane.js" defer></script>
 <style>
-  body { font-family: "Segoe UI", -apple-system, sans-serif; margin: 0; padding: 14px; color: #1a1a1a; font-size: 13px; }
+  /* Explicit background is required: without it the host's theme (Outlook
+     dark mode, for one) bleeds through behind our dark text. */
+  body { font-family: "Segoe UI", -apple-system, sans-serif; margin: 0; padding: 14px; color: #1a1a1a; background: #ffffff; font-size: 13px; }
+  @media (prefers-color-scheme: dark) {
+    body { color: #e5e7eb; background: #1f2937; }
+    .detail { border-top-color: #374151; }
+    .detail dt { color: #9ca3af; }
+    #status, .tokens { color: #9ca3af; }
+  }
   h1 { font-size: 15px; margin: 0 0 12px; }
   #status { color: #6b7280; }
   .verdict { border-radius: 8px; padding: 12px; margin-bottom: 12px; border: 1px solid transparent; }
