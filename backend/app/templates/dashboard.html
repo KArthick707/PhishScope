@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>PhishScope Dashboard</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 900px; margin: 40px auto; padding: 0 20px; color: #1a1a1a; }
+  h1 { font-size: 22px; }
+  .card { border: 1px solid #ddd; border-radius: 8px; padding: 20px; margin-bottom: 20px; }
+  button { background: #2563eb; color: white; border: none; padding: 10px 18px; border-radius: 6px; font-size: 14px; cursor: pointer; }
+  button:hover { background: #1d4ed8; }
+  button.secondary { background: #6b7280; }
+  button.secondary:hover { background: #4b5563; }
+  button:disabled { background: #9ca3af; cursor: not-allowed; }
+  table { width: 100%; border-collapse: collapse; margin-top: 16px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #eee; font-size: 13px; }
+  .badge { padding: 3px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+  .badge-phishing { background: #fee2e2; color: #991b1b; }
+  .badge-suspicious { background: #fef3c7; color: #92400e; }
+  .badge-needs_review { background: #e0e7ff; color: #3730a3; }
+  .badge-benign_or_low_risk { background: #dcfce7; color: #166534; }
+  #status { color: #6b7280; font-size: 13px; margin-top: 8px; }
+</style>
+</head>
+<body>
+  <h1>PhishScope — Gmail Inbox Scan</h1>
+
+  {% if not connected %}
+  <div class="card">
+    <p>Connect your Gmail account to scan your inbox for phishing.</p>
+    <a href="/auth/google/login"><button>Connect Gmail</button></a>
+  </div>
+  {% else %}
+  <div class="card">
+    <p>Gmail is connected.</p>
+    <button id="scanBtn" onclick="scanInbox()">Scan last 10 emails</button>
+    <button class="secondary" onclick="disconnect()">Disconnect</button>
+    <div id="status"></div>
+  </div>
+
+  <div id="resultsCard" class="card" style="display:none;">
+    <table>
+      <thead>
+        <tr><th>Subject</th><th>From</th><th>Verdict</th><th>Confidence</th><th>Reason</th></tr>
+      </thead>
+      <tbody id="resultsBody"></tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  <script>
+    async function scanInbox() {
+      const btn = document.getElementById('scanBtn');
+      const status = document.getElementById('status');
+      btn.disabled = true;
+      status.textContent = 'Scanning...';
+
+      try {
+        const res = await fetch('/scan/inbox?max_results=10', { method: 'POST' });
+        if (!res.ok) throw new Error('Scan failed: ' + res.status);
+        const data = await res.json();
+        renderResults(data.results);
+        status.textContent = `Scanned ${data.scanned_count} emails.`;
+      } catch (err) {
+        status.textContent = err.message;
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    function renderResults(results) {
+      const body = document.getElementById('resultsBody');
+      const card = document.getElementById('resultsCard');
+      body.innerHTML = '';
+
+      results.forEach(r => {
+        if (r.error) {
+          body.innerHTML += `<tr><td colspan="5">Error analyzing ${r.meta.gmail_id}: ${r.error}</td></tr>`;
+          return;
+        }
+        const verdict = r.final_decision.final_verdict;
+        const subject = (r.email && r.email.subject) || '(no subject)';
+        const from = (r.email && r.email.from) || '(unknown sender)';
+        body.innerHTML += `<tr>
+          <td>${escapeHtml(subject)}</td>
+          <td>${escapeHtml(from)}</td>
+          <td><span class="badge badge-${verdict}">${verdict}</span></td>
+          <td>${r.final_decision.confidence}%</td>
+          <td>${escapeHtml(r.final_decision.reason || '')}</td>
+        </tr>`;
+      });
+
+      card.style.display = 'block';
+    }
+
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
+    async function disconnect() {
+      await fetch('/auth/google/disconnect', { method: 'POST' });
+      window.location.reload();
+    }
+  </script>
+</body>
+</html>
