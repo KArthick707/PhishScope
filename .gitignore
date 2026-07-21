@@ -18,3 +18,6 @@ venv/
 # OAuth tokens -- live Gmail API credentials, never commit
 backend/.gmail_token.json
 .env
+
+# Triage worker's local sync watermark (per-install state, not project data)
+backend/.triage_state.json

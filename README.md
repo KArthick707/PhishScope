@@ -33,11 +33,19 @@ email → parser → rule engine ─┐
 
 All three call the same backend pipeline — one detector, three entry points:
 
-- **Web dashboard** — connect a Gmail account (read-only OAuth) and scan your inbox on demand. `backend/app/main.py` (`/dashboard`, `/scan/inbox`).
+- **Web dashboard** — connect a Gmail account and scan your inbox on demand, or let it triage automatically. `backend/app/main.py` (`/dashboard`, `/scan/inbox`).
 - **Gmail Add-on** — a sidebar card that scans the open message automatically. See [`gmail-addon/README.md`](gmail-addon/README.md).
 - **Outlook add-in** — a taskpane with the same experience for Outlook. See [`outlook-addin/README.md`](outlook-addin/README.md).
 
 Both add-ons preserve full header-aware detection: Gmail's Add-on API and Outlook's `getAllInternetHeadersAsync` both expose complete internet headers, which is why add-ins were chosen over a browser extension that could only see rendered DOM content.
+
+### Live triage
+
+Beyond on-demand scanning, the dashboard runs a background worker (`triage_worker.py`) that polls your inbox (every 60s by default) for new mail using Gmail's incremental history API — no full re-scan each cycle, just what actually arrived. Anything scored above `benign_or_low_risk` gets auto-labeled in Gmail (`PhishScope/Phishing`, `PhishScope/Suspicious`, `PhishScope/Needs Review`) so it's visible in your inbox without opening the dashboard, and the dashboard's "Live triage" panel shows what was just flagged in real time.
+
+This uses polling rather than Gmail's push-notification API (Cloud Pub/Sub) deliberately — no extra GCP infrastructure to stand up, at the cost of up to a minute of latency instead of near-instant delivery. The worker is written so a push-based trigger could replace the polling loop later without touching the analysis or labeling logic.
+
+Labeling requires the broader `gmail.modify` scope (vs. the dashboard's original read-only scope) — connections made before this feature shipped will show a "reconnect" prompt.
 
 ## Quick start (backend + web dashboard)
 
@@ -59,7 +67,7 @@ pip install -r requirements-dev.txt
 pytest tests/ -v
 ```
 
-31 tests cover the rule engine, the hybrid model's prediction contract, the decision engine (including regression tests for two real bugs found via evaluation — a threshold that made "phishing" verdicts nearly unreachable, and a marketing-pattern heuristic that could mask real phishing), and both the Gmail and Outlook API contracts.
+40 tests cover the rule engine, the hybrid model's prediction contract, the decision engine (including regression tests for two real bugs found via evaluation — a threshold that made "phishing" verdicts nearly unreachable, and a marketing-pattern heuristic that could mask real phishing), both the Gmail and Outlook API contracts, and the label-management/scope-detection logic behind live triage.
 
 ## Repository layout
 

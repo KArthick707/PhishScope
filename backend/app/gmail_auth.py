@@ -5,7 +5,7 @@ from google_auth_oauthlib.flow import Flow
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request as GoogleAuthRequest
 
-SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
+SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
 
 # MVP simplification: single local user, token kept in a gitignored file next to
 # the backend. A hosted multi-user version would need per-user encrypted storage
@@ -86,6 +86,23 @@ def _save_credentials(credentials: Credentials) -> None:
 
 def is_connected() -> bool:
     return os.path.exists(TOKEN_FILE)
+
+
+def has_required_scope() -> bool:
+    """True only if the stored token actually covers today's SCOPES.
+
+    SCOPES was broadened from gmail.readonly to gmail.modify to support
+    label-based triage. A token saved before that change still exists on
+    disk (is_connected() would say True) but Google will reject any
+    modify call with an opaque 403 -- checking this explicitly lets
+    callers show "reconnect required" instead of a confusing failure.
+    """
+    if not is_connected():
+        return False
+    with open(TOKEN_FILE, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    granted = set(data.get("scopes") or [])
+    return set(SCOPES).issubset(granted)
 
 
 def get_credentials() -> Credentials:

@@ -1,7 +1,9 @@
+import asyncio
 import base64
 import binascii
 import os
 import secrets
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.responses import RedirectResponse
@@ -11,19 +13,27 @@ from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.parser import parse_eml_bytes, parse_headers_and_body
-from app.features import extract_features
-from app.scorer import score_email
-from app.explainer import explain_prediction, explain_ml_prediction
-from app.ml_predictor import predict_email
-from app.decision_engine import make_final_decision
+from app.pipeline import analyze_parsed_email
 from app import gmail_auth
 from app.gmail_client import fetch_recent_raw_messages
+from app import triage_worker
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Always launched; the loop itself is a no-op each cycle until Gmail is
+    # connected with the required scope (see triage_worker._run_one_cycle),
+    # so there's nothing to gate here at startup time.
+    task = asyncio.create_task(triage_worker.run_triage_loop())
+    yield
+    task.cancel()
 
 
 app = FastAPI(
     title="PhishScope API",
     description="Explainable conflict-aware hybrid phishing email detection system.",
-    version="0.4.1"
+    version="0.4.1",
+    lifespan=lifespan,
 )
 
 templates = Jinja2Templates(directory=os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates"))
@@ -56,130 +66,9 @@ def health():
     return {"status": "ok"}
 
 
-def safe_get_preview(parsed: dict) -> str:
-    """
-    Safely extracts email text from parsed email.
-    Prevents crashes if preview/text/body fields are missing.
-    """
-
-    body = parsed.get("body", {})
-
-    if isinstance(body, dict):
-        return (
-            body.get("preview")
-            or body.get("text")
-            or body.get("plain")
-            or ""
-        )
-
-    if isinstance(body, str):
-        return body
-
-    return ""
-
-
-def normalize_ml_result(ml_result: dict) -> dict:
-    """
-    Ensures the ML result always contains:
-    - prediction
-    - label
-    - phishing_probability
-
-    This protects the API even if the current ML model only returns prediction/label.
-    """
-
-    if ml_result is None:
-        ml_result = {}
-
-    prediction = int(ml_result.get("prediction", 0))
-
-    label = ml_result.get("label")
-    if not label:
-        label = "phishing" if prediction == 1 else "benign"
-
-    phishing_probability = ml_result.get("phishing_probability")
-
-    if phishing_probability is None:
-        phishing_probability = ml_result.get("probability")
-
-    if phishing_probability is None:
-        phishing_probability = 0.85 if prediction == 1 else 0.15
-
-    phishing_probability = float(phishing_probability)
-
-    return {
-        "prediction": prediction,
-        "label": label,
-        "phishing_probability": round(phishing_probability, 4)
-    }
-
-
-def analyze_parsed_email(parsed: dict) -> dict:
-    """Runs the full rule+ML+decision+explanation pipeline on an already-parsed
-    email dict. Shared by /analyze/eml (uploaded file) and /scan/inbox (Gmail)
-    so both entry points stay in sync with the same pipeline."""
-    features = extract_features(parsed)
-    scoring = score_email(features)
-
-    email_text = safe_get_preview(parsed)
-
-    rule_feature_values = {
-        "url_count": features.get("url_count", 0),
-        "urgency_keyword_count": features.get("urgency_keyword_count", 0),
-        "credential_keyword_count": features.get("credential_keyword_count", 0),
-        "risk_score": scoring.get("score", 0),
-    }
-
-    ml_result = predict_email(email_text, rule_features=rule_feature_values)
-    ml_result = normalize_ml_result(ml_result)
-
-    final_decision = make_final_decision(
-        rule_result=scoring,
-        ml_result=ml_result,
-        features=features
-    )
-
-    explanation = explain_prediction(
-        features=features,
-        rule_result=scoring,
-        ml_prediction=ml_result["prediction"]
-    )
-
-    try:
-        ml_explanation = explain_ml_prediction(email_text, rule_feature_values)
-    except Exception:
-        ml_explanation = None
-
-    return {
-        "meta": {
-            "rule_score": scoring.get("score"),
-            "rule_verdict": scoring.get("verdict")
-        },
-        "ml": {
-            "prediction": ml_result.get("prediction"),
-            "raw_label": ml_result.get("label"),
-            "raw_probability": ml_result.get("phishing_probability"),
-            "adjusted_label": final_decision.get("ml_adjusted_label"),
-            "adjusted_probability": final_decision.get("ml_adjusted_probability"),
-            "adjustment_reasons": final_decision.get(
-                "ml_adjustment_reasons",
-                []
-            )
-        },
-        "final_decision": final_decision,
-        "email": parsed.get("email", {}),
-        "urls": parsed.get("urls", []),
-        "url_count": parsed.get(
-            "url_count",
-            len(parsed.get("urls", []))
-        ),
-        "attachments": parsed.get("attachments", []),
-        "features": features,
-        "evidence": scoring.get("evidence", []),
-        "explanation": explanation,
-        "ml_explanation": ml_explanation,
-        "previews": parsed.get("body", {})
-    }
+@app.get("/triage/status")
+def triage_status():
+    return triage_worker.get_status()
 
 
 @app.post("/analyze/eml")
@@ -290,7 +179,10 @@ def dashboard(request: Request):
     return templates.TemplateResponse(
         request=request,
         name="dashboard.html",
-        context={"connected": gmail_auth.is_connected()}
+        context={
+            "connected": gmail_auth.is_connected(),
+            "needs_reconnect": gmail_auth.is_connected() and not gmail_auth.has_required_scope(),
+        }
     )
 
 
@@ -322,6 +214,11 @@ def google_disconnect():
 def scan_inbox(max_results: int = 10):
     if not gmail_auth.is_connected():
         raise HTTPException(status_code=401, detail="Gmail is not connected. Visit /auth/google/login first.")
+    if not gmail_auth.has_required_scope():
+        raise HTTPException(
+            status_code=401,
+            detail="Gmail is connected with an outdated permission scope. Disconnect and reconnect to continue."
+        )
 
     try:
         messages = fetch_recent_raw_messages(max_results=max_results)
