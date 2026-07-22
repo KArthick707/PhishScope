@@ -14,3 +14,14 @@ numpy==2.4.6
 google-auth==2.56.0
 google-auth-oauthlib==1.4.0
 google-api-python-client==2.198.0
+
+# Investigator agent (opt-in, gated /investigate endpoint). anthropic drives the
+# tool-calling loop; httpx follows redirect chains behind the SSRF guard; dnspython
+# and python-whois are the DNS/WHOIS enrichment tools. Floors (not exact pins)
+# because the exact current versions weren't verifiable offline -- tighten to == when
+# you next lock the environment. anthropic must be recent enough for claude-opus-4-8
+# + adaptive thinking (the default model; override with PHISHSCOPE_INVESTIGATOR_MODEL).
+anthropic>=0.69.0
+httpx>=0.28.1
+dnspython>=2.6.0
+python-whois>=0.9.4

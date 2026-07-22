@@ -17,6 +17,11 @@ from app.pipeline import analyze_parsed_email
 from app import gmail_auth
 from app.gmail_client import fetch_recent_raw_messages
 from app import triage_worker
+from app.investigator import (
+    InvestigatorNotConfigured,
+    run_investigation,
+    should_investigate,
+)
 
 
 @asynccontextmanager
@@ -72,7 +77,13 @@ def triage_status():
 
 
 @app.post("/analyze/eml")
-async def analyze_eml(file: UploadFile = File(...)):
+async def analyze_eml(request: Request, file: UploadFile = File(...)):
+    # Gate this the same way /analyze/raw and /analyze/outlook are gated -- it
+    # reaches the same pipeline, so leaving it open let a public deployment be
+    # used as a free analysis API (and now, indirectly, a way to trigger costly
+    # networked investigations).
+    require_api_key(request)
+
     if not file.filename.lower().endswith(".eml"):
         raise HTTPException(
             status_code=400,
@@ -172,6 +183,81 @@ def analyze_outlook(payload: OutlookEmailRequest, request: Request):
         return analyze_parsed_email(parsed)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Email analysis failed: {str(exc)}")
+
+
+class InvestigateRequest(BaseModel):
+    raw_base64: str | None = None          # Gmail add-on surface (primary)
+    headers: str | None = None             # Outlook surface
+    body_html: str = ""
+    body_text: str = ""
+    force: bool = False                    # analyst override of the borderline gate
+
+
+@app.post("/investigate")
+async def investigate(payload: InvestigateRequest, request: Request):
+    """Runs the SOC-analyst investigator agent on a borderline email and returns
+    the standard analysis dict with an added `investigation` evidence trail.
+
+    Accepts the same inputs as the analyze endpoints (raw_base64 for Gmail, or
+    headers+body for Outlook). The verdict is re-derived here rather than trusted
+    from the client -- the pipeline is fast (rules + local model, no network), so
+    this stays stateless. The (slow, networked) agent runs only for borderline
+    verdicts unless `force` is set, and only when an Anthropic API key is present.
+    """
+    require_api_key(request)
+
+    if payload.raw_base64:
+        encoded = payload.raw_base64.strip()
+        padded = encoded + "=" * (-len(encoded) % 4)
+        try:
+            raw_bytes = base64.urlsafe_b64decode(padded)
+        except (binascii.Error, ValueError):
+            try:
+                raw_bytes = base64.b64decode(padded)
+            except (binascii.Error, ValueError):
+                raise HTTPException(status_code=400, detail="raw_base64 is not valid base64/base64url.")
+        if not raw_bytes:
+            raise HTTPException(status_code=400, detail="Decoded message is empty.")
+        try:
+            parsed = parse_eml_bytes(raw_bytes)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Email parsing failed: {str(exc)}")
+    elif payload.headers and payload.headers.strip():
+        try:
+            parsed = parse_headers_and_body(
+                headers_text=payload.headers,
+                html_body=payload.body_html,
+                text_body=payload.body_text,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Email parsing failed: {str(exc)}")
+    else:
+        raise HTTPException(status_code=400, detail="Provide either raw_base64 or headers.")
+
+    try:
+        analysis = analyze_parsed_email(parsed)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Email analysis failed: {str(exc)}")
+
+    if not (payload.force or should_investigate(analysis["final_decision"])):
+        analysis["investigation"] = {
+            "investigated": False,
+            "reason": "Verdict is not borderline; pass force=true to investigate anyway.",
+        }
+        return analysis
+
+    try:
+        # Blocking WHOIS/DNS/HTTP + LLM I/O -- run off the event loop, the same
+        # reasoning triage_worker applies to its synchronous pipeline work.
+        analysis["investigation"] = await asyncio.to_thread(
+            run_investigation, parsed, analysis
+        )
+    except InvestigatorNotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Investigation failed: {str(exc)}")
+
+    return analysis
 
 
 @app.get("/dashboard")

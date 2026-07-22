@@ -47,6 +47,29 @@ This uses polling rather than Gmail's push-notification API (Cloud Pub/Sub) deli
 
 Labeling requires the broader `gmail.modify` scope (vs. the dashboard's original read-only scope) — connections made before this feature shipped will show a "reconnect" prompt.
 
+## Investigator agent (borderline verdicts)
+
+The pipeline above produces a verdict in one shot. For the genuinely borderline band (`needs_review` / `suspicious`), PhishScope can go a step further and run an **LLM tool-calling agent** that investigates the message the way a SOC analyst would — autonomously deciding what to check, gathering evidence, and producing a structured evidence trail alongside a recommended verdict.
+
+`POST /investigate` takes the same input as the analyze endpoints (raw base64 for Gmail, headers+body for Outlook), re-runs the fast verdict, and — only if the verdict is borderline (or `force: true` is set) — hands the message to the agent (`backend/app/investigator/`). The agent has a small tool belt:
+
+- **`whois_domain_age`** — how recently the sender/link domain was registered (freshly-registered domains strongly correlate with phishing)
+- **`dns_lookup`** — whether the domain resolves and publishes MX records (is it actually set up to send mail?)
+- **`follow_redirects`** — where a link *actually* lands after following its redirect chain (cloaked destinations)
+- **`cross_check_headers`** — does the visible body's claim ("from Microsoft") match the From / Return-Path / SPF / DKIM reality?
+
+It returns the standard analysis dict plus an `investigation` block: the `evidence_trail`, a plain-language `agent_summary`, and a `recommended_verdict`.
+
+**Safety posture.** This is the pipeline's first code that makes outbound network calls driven by attacker-controlled input (URLs and domains lifted from the email), so it is built deny-by-default:
+
+- **Opt-in** — requires an `ANTHROPIC_API_KEY`; without it, `/investigate` returns a clean 503, never a stack trace. Everything else stays offline-by-default.
+- **Gated** — requires the same `X-API-Key` as the other analyze endpoints (this release also closes a pre-existing gap where `/analyze/eml` was ungated).
+- **SSRF-guarded** — every domain is resolved and every resolved IP is checked against a private / loopback / link-local / cloud-metadata blocklist *before* any connection, on every redirect hop; the scheme is restricted to http/https; redirects and timeouts are capped (`backend/app/investigator/net_guard.py`).
+- **Bounded** — hard caps on tool calls and total wall-clock so a crafted email can't steer the agent into unbounded lookups or cost.
+- **Advisory** — the agent *recommends*; it never overwrites the pipeline's verdict and never touches the mailbox. The `recommended_verdict` is computed deterministically from the evidence the agent gathered, so a well-worded phishing email can't talk the model into a benign verdict.
+
+Configure via env: `PHISHSCOPE_INVESTIGATOR_MODEL` (default `claude-opus-4-8`; set to e.g. `claude-haiku-4-5` for a cheaper run), `PHISHSCOPE_INVESTIGATOR_MAX_TOOL_CALLS`, `PHISHSCOPE_INVESTIGATOR_TIMEOUT_SECONDS`, `PHISHSCOPE_INVESTIGATOR_MAX_REDIRECTS`.
+
 ## Quick start (backend + web dashboard)
 
 ```bash
@@ -67,7 +90,7 @@ pip install -r requirements-dev.txt
 pytest tests/ -v
 ```
 
-40 tests cover the rule engine, the hybrid model's prediction contract, the decision engine (including regression tests for two real bugs found via evaluation — a threshold that made "phishing" verdicts nearly unreachable, and a marketing-pattern heuristic that could mask real phishing), both the Gmail and Outlook API contracts, and the label-management/scope-detection logic behind live triage.
+The suite covers the rule engine, the hybrid model's prediction contract, the decision engine (including regression tests for two real bugs found via evaluation — a threshold that made "phishing" verdicts nearly unreachable, and a marketing-pattern heuristic that could mask real phishing), both the Gmail and Outlook API contracts, the label-management/scope-detection logic behind live triage, and the investigator agent (the SSRF egress guard, each tool's signal, the bounded agent loop, and `/investigate` gating). Agent tests mock the LLM and all network I/O — the suite never makes a real request.
 
 ## Repository layout
 
