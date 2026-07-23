@@ -124,3 +124,25 @@ def test_cross_check_headers_auth_failure_is_malicious():
     result = tools.cross_check_headers(parsed, analysis)
     assert result["signal"] == SIGNAL_MALICIOUS
     assert result["spf_fail"] is True
+
+
+def test_cross_check_headers_dkim_missing_alone_is_not_malicious():
+    # Regression test for the real-corpus backtest finding: dkim_missing was
+    # True for 99.2% of 528 real borderline emails (both phishing and
+    # legitimate), so on its own it must not drive a malicious verdict.
+    parsed, analysis = _parsed_and_analysis(
+        "newsletter.example", "Here is your weekly update.", dkim_missing=True
+    )
+    result = tools.cross_check_headers(parsed, analysis)
+    assert result["signal"] != SIGNAL_MALICIOUS
+    assert result["dkim_missing"] is True
+
+
+def test_cross_check_headers_dkim_missing_with_mismatch_is_malicious():
+    # dkim_missing DOES count once corroborated by an actual header mismatch.
+    parsed, analysis = _parsed_and_analysis(
+        "newsletter.example", "Here is your weekly update.",
+        dkim_missing=True, return_path_mismatch=True,
+    )
+    result = tools.cross_check_headers(parsed, analysis)
+    assert result["signal"] == SIGNAL_MALICIOUS

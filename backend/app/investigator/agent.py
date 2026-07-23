@@ -20,7 +20,6 @@ from .schemas import (
     SIGNAL_BENIGN,
     SIGNAL_MALICIOUS,
     SIGNAL_NEUTRAL,
-    VERDICT_BENIGN,
     VERDICT_PHISHING,
     VERDICT_SUSPICIOUS,
     VERDICT_UNCHANGED,
@@ -100,17 +99,21 @@ def fuse_recommendation(evidence_trail: list, analysis: dict) -> str:
     """Deterministically map the agent-gathered evidence to a recommended verdict.
 
     ── LEARNING-MODE CONTRIBUTION POINT #2 ─────────────────────────────────────
-    This is a real security judgment call: how much is each signal worth, and what
-    combination should escalate all the way to "phishing"? It's the deterministic
-    sanity layer on top of the LLM -- even a perfectly-worded phishing email can't
-    talk its way past these rules, because the LLM never sets the verdict.
+    This is a real security judgment call: how much is each malicious signal
+    worth, and what combination should escalate all the way to "phishing" vs.
+    just "suspicious"? It's the deterministic sanity layer on top of the LLM --
+    even a perfectly-worded phishing email can't talk its way past these rules,
+    because the LLM never sets the verdict.
 
-    The default below is a sensible starting point. Consider tuning it: should a
-    single fresh-domain finding alone escalate to "phishing"? Should a benign
-    WHOIS age be allowed to *down*grade a verdict the rules were worried about, or
-    only ever hold steady? Your call changes the tool's false-positive vs
-    false-negative posture -- the same risk-appetite decision the pipeline already
-    defers to a human in decision_engine.py (ML_BENIGN_CEILING).
+    Auto-clearing to "benign" is deliberately NOT one of the tunable choices here
+    (see the comment below) -- that's a settled decision, not an open one. What's
+    still yours to tune: should a single fresh-domain finding alone escalate to
+    "phishing" without also requiring impersonation? Is len(malicious) >= 2 the
+    right bar, or should some malicious signals (e.g. a blocked-SSRF redirect)
+    count for more than others? Your call changes the false-positive vs.
+    false-negative posture on the escalation side -- the same risk-appetite
+    decision the pipeline already defers to a human in decision_engine.py
+    (ML_BENIGN_CEILING).
     ─────────────────────────────────────────────────────────────────────────────
     """
     malicious = [s for s in evidence_trail if s.get("signal") == SIGNAL_MALICIOUS]
@@ -135,8 +138,17 @@ def fuse_recommendation(evidence_trail: list, analysis: dict) -> str:
         return VERDICT_PHISHING
     if len(malicious) == 1:
         return VERDICT_SUSPICIOUS
-    if len(benign) >= 2 and not malicious:
-        return VERDICT_BENIGN
+
+    # Deliberately never auto-clears to VERDICT_BENIGN, even when every signal
+    # comes back benign. A real-corpus backtest (research/investigator_backtest_results.csv)
+    # showed this branch would have cleared 74% of borderline phishing as safe --
+    # not because the tools are wrong, but because "no malicious signal found"
+    # isn't the same as "confirmed safe," and there wasn't enough live/current
+    # phishing data to validate a safe auto-clear threshold. Escalating on real
+    # evidence is fine; silently clearing on the *absence* of evidence is not --
+    # the asymmetry matters: a missed escalation costs review time, a wrong
+    # auto-clear costs a real user getting phished. Revisit only once there's an
+    # actual validated basis for it.
     return VERDICT_UNCHANGED
 
 

@@ -9,6 +9,7 @@ from app.investigator.agent import InvestigatorNotConfigured, fuse_recommendatio
 from app.investigator.schemas import (
     SIGNAL_BENIGN,
     SIGNAL_MALICIOUS,
+    SIGNAL_NEUTRAL,
     VERDICT_BENIGN,
     VERDICT_PHISHING,
     VERDICT_SUSPICIOUS,
@@ -128,9 +129,22 @@ def test_fuse_single_malicious_is_suspicious():
     assert fuse_recommendation([_step("dns_lookup", SIGNAL_MALICIOUS)], {}) == VERDICT_SUSPICIOUS
 
 
-def test_fuse_multiple_benign_is_benign():
-    trail = [_step("whois_domain_age", SIGNAL_BENIGN), _step("dns_lookup", SIGNAL_BENIGN)]
-    assert fuse_recommendation(trail, {}) == VERDICT_BENIGN
+def test_fuse_all_benign_never_auto_clears():
+    # Regression test: fuse_recommendation must never return VERDICT_BENIGN, even
+    # when every signal is benign. A real-corpus backtest showed "no malicious
+    # signal found" auto-clearing would have waved through most borderline
+    # phishing in this dataset -- see the comment in fuse_recommendation().
+    trail = [_step("whois_domain_age", SIGNAL_BENIGN), _step("dns_lookup", SIGNAL_BENIGN),
+             _step("follow_redirects", SIGNAL_BENIGN), _step("cross_check_headers", SIGNAL_BENIGN)]
+    assert fuse_recommendation(trail, {}) == VERDICT_UNCHANGED
+
+
+def test_fuse_recommendation_can_never_return_benign():
+    assert VERDICT_BENIGN not in {
+        fuse_recommendation([], {}),
+        fuse_recommendation([_step("whois_domain_age", SIGNAL_BENIGN)], {}),
+        fuse_recommendation([_step("dns_lookup", SIGNAL_NEUTRAL)], {}),
+    }
 
 
 def test_fuse_no_evidence_is_unchanged():

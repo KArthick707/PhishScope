@@ -54,10 +54,12 @@ def _registrable(host: str) -> str:
 def _whois_raw(domain: str):
     """Test seam: the actual WHOIS call. python-whois parsing is flaky per-TLD,
     so callers wrap this in try/except and degrade to a neutral 'unknown' signal
-    rather than crash."""
+    rather than crash. Timeout is explicit (not the library's implicit default)
+    because agent.py's total wall-clock budget only checks *between* tool calls
+    -- it can't interrupt a single hanging WHOIS lookup already in progress."""
     import whois
 
-    return whois.whois(domain)
+    return whois.whois(domain, timeout=int(config.get_whois_timeout_seconds()))
 
 
 def _earliest_datetime(value) -> datetime | None:
@@ -239,19 +241,28 @@ def cross_check_headers(parsed: dict, analysis: dict) -> dict:
         if not sender_domain.endswith(ORG_BRAND_DOMAINS[brand])
     ]
 
-    auth_failed = bool(
-        features.get("spf_fail") or features.get("dkim_missing") or features.get("dmarc_fail")
-    )
+    dkim_missing = bool(features.get("dkim_missing"))
     header_mismatch = bool(
         features.get("return_path_mismatch") or features.get("reply_to_mismatch")
     )
+    # SPF/DMARC failure is rare and specific (0% on a 528-email real-corpus
+    # backtest) -- a strong standalone signal. dkim_missing alone is not: it was
+    # true for 99.2% of that same corpus (real mail, both phishing and
+    # legitimate, plus historical mail that predates DKIM), so on its own it
+    # carries ~no discriminating power and drowns out the tools that do.
+    # decision_engine.py never uses its own authentication_failed() standalone
+    # to escalate risk either -- only as one AND-condition alongside a
+    # trusted-domain match. Mirroring that: dkim_missing only counts here when
+    # corroborated by an actual header mismatch.
+    strong_auth_failure = bool(features.get("spf_fail") or features.get("dmarc_fail"))
+    auth_failed = strong_auth_failure or (dkim_missing and header_mismatch)
 
     finding = {
         "sender_domain": sender_domain,
         "body_claimed_brands": claimed_brands,
         "impersonated_brands": mismatched_brands,
         "spf_fail": bool(features.get("spf_fail")),
-        "dkim_missing": bool(features.get("dkim_missing")),
+        "dkim_missing": dkim_missing,
         "dmarc_fail": bool(features.get("dmarc_fail")),
         "return_path_mismatch": bool(features.get("return_path_mismatch")),
         "reply_to_mismatch": bool(features.get("reply_to_mismatch")),
@@ -264,10 +275,9 @@ def cross_check_headers(parsed: dict, analysis: dict) -> dict:
             f"'{sender_domain or 'an unknown domain'}', which is not their real domain."
         )
     elif auth_failed or header_mismatch:
-        finding["signal"] = SIGNAL_MALICIOUS
         reasons = []
-        if auth_failed:
-            reasons.append("sender authentication (SPF/DKIM/DMARC) did not pass")
+        if strong_auth_failure:
+            reasons.append("sender authentication (SPF/DMARC) failed")
         if header_mismatch:
             reasons.append("the Return-Path/Reply-To domain differs from the From domain")
         finding["signal"] = SIGNAL_MALICIOUS
@@ -279,7 +289,7 @@ def cross_check_headers(parsed: dict, analysis: dict) -> dict:
         finding["signal"] = SIGNAL_BENIGN
         finding["summary"] = (
             f"The body references {', '.join(claimed_brands)} and the sender domain "
-            f"'{sender_domain}' is consistent with that, with passing authentication."
+            f"'{sender_domain}' is consistent with that, with no header mismatch."
         )
 
     return finding

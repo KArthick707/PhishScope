@@ -40,6 +40,16 @@ def get_http_timeout_seconds() -> float:
     return _float_env("PHISHSCOPE_INVESTIGATOR_HTTP_TIMEOUT_SECONDS", 6.0, minimum=0.5)
 
 
+def get_whois_timeout_seconds() -> float:
+    """Timeout for a single WHOIS (port-43) lookup. python-whois defaults this
+    to 10s internally, but leaving it as an implicit library default means the
+    agent's own total wall-clock budget (get_total_timeout_seconds) can't
+    actually bound an in-progress WHOIS call -- that check only runs between
+    tool calls, not inside one. Passing this explicitly makes the bound
+    deliberate and consistent with the rest of this module's config."""
+    return _float_env("PHISHSCOPE_INVESTIGATOR_WHOIS_TIMEOUT_SECONDS", 10.0, minimum=1.0)
+
+
 def has_api_key() -> bool:
     """Whether an Anthropic API key is configured. Absent it, the /investigate
     endpoint returns a clean 503 rather than letting the SDK 401 mid-agent-loop.
